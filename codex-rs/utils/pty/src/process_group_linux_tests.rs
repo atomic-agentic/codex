@@ -4,14 +4,14 @@ use std::process::Command;
 
 use pretty_assertions::assert_eq;
 
-use super::parent_death_signal_refused;
+use super::parent_death_signal_unavailable;
 use super::set_parent_death_signal;
 
 #[test]
-fn a_refused_prctl_is_tolerated() {
-    for errno in [libc::EPERM, libc::EACCES, libc::ENOSYS] {
+fn a_refused_or_unsupported_prctl_is_tolerated() {
+    for errno in [libc::EPERM, libc::EACCES, libc::ENOSYS, libc::EINVAL] {
         assert!(
-            parent_death_signal_refused(&io::Error::from_raw_os_error(errno)),
+            parent_death_signal_unavailable(&io::Error::from_raw_os_error(errno)),
             "errno {errno} should be tolerated"
         );
     }
@@ -19,9 +19,9 @@ fn a_refused_prctl_is_tolerated() {
 
 #[test]
 fn other_prctl_failures_are_still_errors() {
-    for errno in [libc::EINVAL, libc::EFAULT] {
+    for errno in [libc::EFAULT, libc::EBADF, libc::ENOMEM] {
         assert!(
-            !parent_death_signal_refused(&io::Error::from_raw_os_error(errno)),
+            !parent_death_signal_unavailable(&io::Error::from_raw_os_error(errno)),
             "errno {errno} should not be tolerated"
         );
     }
