@@ -26,9 +26,24 @@ use tokio::process::Child;
 ///
 /// This should run in `pre_exec` and uses `parent_pid` captured before spawn to
 /// avoid a race where the parent exits between fork and exec.
+///
+/// The signal is best effort: where the environment refuses `prctl(2)` (AWS
+/// Lambda's seccomp policy refuses every `prctl` call) or does not implement
+/// the parent-death signal (iSH answers `EINVAL`), the child starts without it
+/// rather than not at all. The parent still terminates the child's process
+/// group when it is done with it.
 pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } == -1 {
-        return Err(io::Error::last_os_error());
+        let err = io::Error::last_os_error();
+        if parent_death_signal_unavailable(&err) {
+            // No signal was armed, so there is no fork/exec race for the
+            // parent-PID check below to close. Skip it: where the platform
+            // reports a parent PID that differs from the one captured before
+            // spawn, as iSH does when a worker thread forks, it would kill
+            // every child.
+            return Ok(());
+        }
+        return Err(err);
     }
 
     if unsafe { libc::getppid() } != parent_pid {
@@ -38,6 +53,18 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+/// Whether `prctl(PR_SET_PDEATHSIG, SIGTERM)` failed because the environment
+/// cannot provide the parent-death signal: a seccomp filter refusing the call
+/// (`EPERM`, `EACCES`, `ENOSYS`), or a kernel or emulator without the option
+/// (`EINVAL`, which a valid signal number cannot otherwise cause).
+fn parent_death_signal_unavailable(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::ENOSYS) | Some(libc::EINVAL)
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -334,3 +361,7 @@ pub fn kill_child_process_group(_child: &mut Child) -> io::Result<()> {
 #[cfg(all(test, target_os = "macos"))]
 #[path = "process_group_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "process_group_linux_tests.rs"]
+mod linux_tests;
