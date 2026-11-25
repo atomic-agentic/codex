@@ -25,14 +25,40 @@ use rama_tcp::TcpStream;
 use rama_tcp::client::TcpStreamConnector;
 use rama_tcp::client::service::TcpConnector;
 use std::error::Error;
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Semaphore;
 
 const BLOCKED: u8 = 1;
 const DIALED: u8 = 2;
+/// Rama may leave secondary address attempts running after one succeeds.
+/// Bound those attempts across all direct proxy dials in this process.
+const DIRECT_DIAL_LIMIT: usize = 256;
+const DIRECT_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+static DIRECT_DIALS: Semaphore = Semaphore::const_new(DIRECT_DIAL_LIMIT);
+
+async fn bounded_dial<F, T>(limit: &Semaphore, timeout: Duration, dial: F) -> io::Result<T>
+where
+    F: Future<Output = io::Result<T>>,
+{
+    let _permit = limit.try_acquire().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "network proxy direct dial limit reached",
+        )
+    })?;
+    tokio::time::timeout(timeout, dial).await.map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            "network proxy direct dial timed out",
+        )
+    })?
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("all resolved addresses were blocked by network policy")]
@@ -215,10 +241,14 @@ impl TcpStreamConnector for TargetCheckedStreamConnector {
         }
 
         self.attempts.fetch_or(DIALED, Ordering::Relaxed);
-        tokio::net::TcpStream::connect(addr)
-            .await
-            .map(TcpStream::from)
-            .map_err(Into::into)
+        bounded_dial(
+            &DIRECT_DIALS,
+            DIRECT_DIAL_TIMEOUT,
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        .map(TcpStream::from)
+        .map_err(Into::into)
     }
 }
 
@@ -287,6 +317,33 @@ mod tests {
     use rama_net::address::HostWithPort;
     use std::net::Ipv4Addr;
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn direct_dial_limit_and_timeout_release_the_descriptor_budget() {
+        let limit = Arc::new(Semaphore::new(1));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let first = {
+            let limit = limit.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                bounded_dial(&limit, Duration::from_millis(500), async move {
+                    started.notify_one();
+                    std::future::pending::<io::Result<()>>().await
+                })
+                .await
+            })
+        };
+        started.notified().await;
+        let blocked = bounded_dial(&limit, Duration::from_secs(1), async { Ok(()) })
+            .await
+            .expect_err("the second dial must be refused");
+        assert_eq!(blocked.kind(), io::ErrorKind::WouldBlock);
+        let timed = first.await.expect("dial task").expect_err("dial times out");
+        assert_eq!(timed.kind(), io::ErrorKind::TimedOut);
+        bounded_dial(&limit, Duration::from_secs(1), async { Ok(()) })
+            .await
+            .expect("a timed-out dial releases its permit");
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn direct_connector_rejects_non_public_target_when_local_binding_disabled() {
