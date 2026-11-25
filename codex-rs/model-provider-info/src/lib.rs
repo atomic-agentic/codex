@@ -167,6 +167,11 @@ pub struct ModelProviderInfo {
     pub model_catalog_url: Option<RedactedString>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
+    /// Refuse HTTP redirects for this provider's requests. A caller that
+    /// supplies a configured API key can use this to keep the key off a
+    /// redirected endpoint, including an HTTPS-to-HTTP downgrade.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reject_redirects: bool,
 
     /// Optional instructions to help the user get a valid value for the
     /// variable and set it.
@@ -234,6 +239,10 @@ pub struct ModelProviderInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub include_internal_metadata: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -574,6 +583,7 @@ other non-default provider fields are not supported"
             base_url,
             model_catalog_url: None,
             env_key: None,
+            reject_redirects: false,
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
@@ -627,6 +637,7 @@ other non-default provider fields are not supported"
             base_url: None,
             model_catalog_url: None,
             env_key: None,
+            reject_redirects: false,
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
@@ -673,6 +684,7 @@ other non-default provider fields are not supported"
             base_url: None,
             model_catalog_url: None,
             env_key: None,
+            reject_redirects: false,
             env_key_instructions: None,
             experimental_bearer_token: None,
             // Config loading supplies default command auth after resolving its working directory.
@@ -920,6 +932,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         base_url: Some(base_url.into()),
         model_catalog_url: None,
         env_key: None,
+        reject_redirects: false,
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,

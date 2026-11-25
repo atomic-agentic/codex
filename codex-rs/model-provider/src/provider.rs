@@ -252,7 +252,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         routing_context: &'a WorkspaceRoutingContext,
     ) -> ModelProviderFuture<'a, codex_protocol::error::Result<ResolvedResponsesProvider>> {
         Box::pin(async move {
-            let mut redirect_policy = ClientRedirectPolicy::Default;
+            let mut redirect_policy = if self.info().reject_redirects {
+                ClientRedirectPolicy::Reject
+            } else {
+                ClientRedirectPolicy::Default
+            };
             if provider_uses_first_party_auth_path(self.info())
                 && self.info().supports_codex_backend_routes()
                 && let Some(auth) = auth.filter(|auth| auth.is_chatgpt_auth())

@@ -188,11 +188,12 @@ pub async fn resolve_request(
                     .map(|state| state.generation)
                     .or(state.map(|state| state.generation)),
                 api_provider,
-                redirect_policy: if provider
-                    .info()
-                    .gateway_oauth
-                    .as_ref()
-                    .is_some_and(GatewayOAuthConfig::uses_credential_export)
+                redirect_policy: if provider.info().reject_redirects
+                    || provider
+                        .info()
+                        .gateway_oauth
+                        .as_ref()
+                        .is_some_and(GatewayOAuthConfig::uses_credential_export)
                 {
                     ClientRedirectPolicy::Reject
                 } else {

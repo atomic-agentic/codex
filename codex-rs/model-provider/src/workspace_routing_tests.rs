@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use crate::ACCOUNT_ROUTING_HEADER;
 use crate::WorkspaceRoutingContext;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::WorkspaceRouting;
@@ -17,6 +19,33 @@ use codex_model_provider_info::ModelProviderInfo;
 use pretty_assertions::assert_eq;
 
 use crate::create_model_provider;
+
+#[tokio::test]
+async fn configured_provider_refuses_redirects_on_both_request_paths() {
+    let mut info = ModelProviderInfo::create_openai_provider(Some("https://example.com/v1".into()));
+    info.requires_openai_auth = false;
+    info.env_key = None;
+    info.reject_redirects = true;
+    let provider = create_model_provider(info, None);
+    let routing = WorkspaceRoutingContext::new("https://chatgpt.com/backend-api".into());
+    assert_eq!(
+        provider
+            .responses_api_provider(&routing)
+            .await
+            .unwrap()
+            .redirect_policy,
+        ClientRedirectPolicy::Reject
+    );
+    let request = crate::resolve_request(
+        provider.as_ref(),
+        None,
+        None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .await
+    .unwrap();
+    assert_eq!(request.redirect_policy, ClientRedirectPolicy::Reject);
+}
 
 struct Routing(WorkspaceRouting);
 
