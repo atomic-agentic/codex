@@ -91,7 +91,8 @@ impl OpenAiModelsEndpoint {
         {
             *manager = manager.without_interactive_login();
         }
-        let redirect_policy = if provider_info.model_catalog_url.is_some()
+        let redirect_policy = if provider_info.reject_redirects
+            || provider_info.model_catalog_url.is_some()
             || provider_info
                 .gateway_oauth
                 .as_ref()
